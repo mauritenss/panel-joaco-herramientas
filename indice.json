@@ -1,0 +1,4 @@
+{
+  "version": "0.6.0",
+  "archivos": ["_base.js", "dibujo.js", "recuadro.js", "suavizar.js"]
+}
