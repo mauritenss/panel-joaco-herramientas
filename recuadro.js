@@ -17,8 +17,31 @@ const ESTILOS = [
 ];
 
 // Márgenes y forma, en proporción al alto del texto medido.
-const MARGEN_X = 0.55;
-const MARGEN_Y = 0.32;
+const MARGEN_X = 0.5;
+const MARGEN_Y = 0.28;
+
+// Tamaño de texto y recuadro juntos, en %. Se recuerda entre sesiones.
+const TAMANIO_MIN = 50;
+const TAMANIO_MAX = 120;
+const TAMANIO_PASO = 5;
+const CLAVE_TAMANIO = "panelJoaco.recuadro.tamanio";
+
+function leerTamanio() {
+  try {
+    const n = Number(window.localStorage.getItem(CLAVE_TAMANIO));
+    return n >= TAMANIO_MIN && n <= TAMANIO_MAX ? n : 100;
+  } catch (error) {
+    return 100;
+  }
+}
+
+function guardarTamanio(n) {
+  try {
+    window.localStorage.setItem(CLAVE_TAMANIO, String(n));
+  } catch (error) { /* sin memoria: vuelve a 100 la próxima vez */ }
+}
+
+let tamanio = leerTamanio();
 const REDONDEO = 0.28; // radio = esta fracción del alto del recuadro
 const BORDE = 1 / 540; // grosor del borde = esta fracción del ancho del cuadro
 
@@ -175,6 +198,36 @@ async function colocarImagen(proyecto, editor, secuencia, bytes, pista, desde, h
   return puesto.item;
 }
 
+// Cambia la escala del clip por `factor` dejando quieto el punto `centro` (0 a 1 del cuadro):
+// la escala crece desde el ancla del clip, así que se corre la posición para compensar.
+async function escalarClip(proyecto, clip, factor, centro) {
+  const cadena = await clip.getComponentChain();
+  const movimiento = await p.buscarComponente(cadena, "AE.ADBE Motion");
+  const posicion = movimiento.getParam(0);
+  const escala = movimiento.getParam(1);
+  if (posicion.isTimeVarying() || escala.isTimeVarying()) {
+    throw new Error("El texto ya tiene keyframes de posición o escala: no se le cambia el tamaño.");
+  }
+  const actual = (await posicion.getStartValue()).value.value;
+  const x = Array.isArray(actual) ? actual[0] : actual.x;
+  const y = Array.isArray(actual) ? actual[1] : actual.y;
+  const escalaActual = (await escala.getStartValue()).value.value;
+  if (typeof x !== "number" || typeof y !== "number" || typeof escalaActual !== "number") {
+    throw new Error("No pude leer la posición y la escala del clip.");
+  }
+  const nueva = escalaActual * factor;
+  p.transaccion(proyecto, "Recuadro: tamaño", (c) => {
+    c.addAction(escala.createSetValueAction(escala.createKeyframe(nueva)));
+    c.addAction(
+      posicion.createSetValueAction(
+        posicion.createKeyframe(new ppro.PointF(centro.x + factor * (x - centro.x), centro.y + factor * (y - centro.y)))
+      )
+    );
+  });
+  const leida = (await escala.getStartValue()).value.value;
+  if (Math.abs(leida - nueva) > 0.5) throw new Error("Premiere no aplicó el tamaño.");
+}
+
 async function recuadro(estilo) {
   const ctx = await p.contexto();
   if (!ctx) return;
@@ -233,7 +286,16 @@ async function recuadro(estilo) {
   const puesto = await colocarImagen(proyecto, editor, secuencia, bytes, pistaRecuadro, desde, hasta, nombre);
   if (!puesto) throw new Error("No encontré el recuadro después de ponerlo.");
 
-  panel.log(`Recuadro ${estilo.nombre.toLowerCase()} listo en V${pistaRecuadro + 1}.`, "ok");
+  if (tamanio !== 100) {
+    const centro = { x: (caja.x + caja.ancho / 2) / cuadro.ancho, y: (caja.y + caja.alto / 2) / cuadro.alto };
+    try {
+      for (const clip of [puesto, texto]) await escalarClip(proyecto, clip, tamanio / 100, centro);
+    } catch (error) {
+      panel.log(`El recuadro quedó, pero sin cambiar el tamaño: ${error.message}`, "error");
+      return { pistaRecuadro, desde, hasta, medida, caja };
+    }
+  }
+  panel.log(`Recuadro ${estilo.nombre.toLowerCase()} listo en V${pistaRecuadro + 1} (tamaño ${tamanio}%).`, "ok");
   return { pistaRecuadro, desde, hasta, medida, caja };
 }
 
@@ -242,7 +304,7 @@ panel.estilosRecuadro = ESTILOS;
 
 panel.registrar({
   nombre: "Recuadro",
-  descripcion: "Seleccioná el subtítulo y tocá un color.",
+  descripcion: "Seleccioná el subtítulo y tocá un color. Tamaño achica o agranda texto y recuadro juntos.",
 
   dibujar(caja) {
     const fila = document.createElement("div");
@@ -266,5 +328,37 @@ panel.registrar({
       fila.appendChild(boton);
     }
     caja.appendChild(fila);
+
+    const filaTamanio = document.createElement("div");
+    filaTamanio.style.display = "flex";
+    filaTamanio.style.alignItems = "center";
+    filaTamanio.style.marginTop = "4px";
+    const etiqueta = document.createElement("div");
+    etiqueta.textContent = "Tamaño";
+    etiqueta.style.marginRight = "8px";
+    const valor = document.createElement("div");
+    valor.style.minWidth = "44px";
+    valor.style.textAlign = "center";
+    const mostrar = () => { valor.textContent = `${tamanio}%`; };
+    const paso = (texto, delta) => {
+      const boton = document.createElement("div");
+      boton.textContent = texto;
+      boton.style.width = "28px";
+      boton.style.textAlign = "center";
+      boton.style.padding = "4px 0";
+      boton.style.border = "1px solid #4a4a4a";
+      boton.style.borderRadius = "4px";
+      boton.style.backgroundColor = "#2d2d2d";
+      boton.style.cursor = "pointer";
+      boton.addEventListener("click", () => {
+        tamanio = Math.min(TAMANIO_MAX, Math.max(TAMANIO_MIN, tamanio + delta));
+        guardarTamanio(tamanio);
+        mostrar();
+      });
+      return boton;
+    };
+    mostrar();
+    filaTamanio.append(etiqueta, paso("−", -TAMANIO_PASO), valor, paso("+", TAMANIO_PASO));
+    caja.appendChild(filaTamanio);
   },
 });
