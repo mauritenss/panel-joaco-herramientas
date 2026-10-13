@@ -40,6 +40,31 @@ function cajaDelTexto(imagen, umbral = 60) {
   return { x: x0, y: y0, ancho: x1 - x0 + 1, alto: y1 - y0 + 1 };
 }
 
+// Cuenta los renglones del texto: tramos de filas con píxeles separados por un hueco vacío.
+// Los huecos chicos (punto de la i, signos) no cuentan. Si los renglones se tocan, da 1.
+function renglonesDelTexto(imagen, caja, umbral = 60) {
+  const tramos = [];
+  let inicio = -1;
+  for (let y = caja.y; y < caja.y + caja.alto; y++) {
+    let hay = false;
+    for (let x = caja.x; x < caja.x + caja.ancho && !hay; x++) hay = imagen.brillo(x, y) > umbral;
+    if (hay && inicio < 0) inicio = y;
+    if (!hay && inicio >= 0) {
+      tramos.push([inicio, y - 1]);
+      inicio = -1;
+    }
+  }
+  if (inicio >= 0) tramos.push([inicio, caja.y + caja.alto - 1]);
+  if (tramos.length === 0) return 1;
+
+  const mayor = Math.max(...tramos.map((t) => t[1] - t[0] + 1));
+  let renglones = 1;
+  for (let i = 1; i < tramos.length; i++) {
+    if (tramos[i][0] - tramos[i - 1][1] - 1 >= mayor * 0.15) renglones++;
+  }
+  return renglones;
+}
+
 function colorRGB(hex) {
   const n = parseInt(hex.replace("#", ""), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
@@ -138,4 +163,4 @@ function recuadroTGA(anchoCuadro, altoCuadro, caja, relleno, borde, radio, groso
   return archivo;
 }
 
-panel.dibujo = { leerBMP, cajaDelTexto, recuadroTGA };
+panel.dibujo = { leerBMP, cajaDelTexto, renglonesDelTexto, recuadroTGA };

@@ -1,5 +1,5 @@
 // Recuadro: pone un rectángulo redondeado a la medida exacta del texto seleccionado, detrás de él,
-// con su misma duración, y anima los dos (entran subiendo con un rebote chico y opacidad).
+// con su misma duración. No anima nada: ni el recuadro ni el texto tienen entrada ni salida.
 //
 // Cómo mide: apaga un instante las otras pistas de video, exporta un cuadro solo con el texto
 // y busca dónde hay píxeles. Con eso dibuja el recuadro (una imagen TGA con transparencia del
@@ -21,10 +21,6 @@ const MARGEN_X = 0.55;
 const MARGEN_Y = 0.32;
 const REDONDEO = 0.28; // radio = esta fracción del alto del recuadro
 const BORDE = 1 / 540; // grosor del borde = esta fracción del ancho del cuadro
-
-// Animación de entrada, en cuadros: sube desde un poco más abajo, se pasa apenas y se acomoda.
-const SUBIDA = 0.015;
-const REBOTE = 0.003;
 
 const CARPETA = "Recuadros Joaco";
 
@@ -118,10 +114,12 @@ async function medirTexto(secuencia, texto, cuadro) {
     for (const e of estados) await e.pista.setMute(e.apagada);
   }
   if (!bytes) throw new Error("No pude leer el cuadro exportado.");
-  const caja = panel.dibujo.cajaDelTexto(panel.dibujo.leerBMP(bytes));
+  const imagen = panel.dibujo.leerBMP(bytes);
+  const caja = panel.dibujo.cajaDelTexto(imagen);
+  const renglones = caja ? panel.dibujo.renglonesDelTexto(imagen, caja) : 1;
   try { await archivo.delete(); } catch (error) { /* no importa */ }
   if (!caja) return null;
-  return { x: caja.x * escala, y: caja.y * escala, ancho: caja.ancho * escala, alto: caja.alto * escala };
+  return { x: caja.x * escala, y: caja.y * escala, ancho: caja.ancho * escala, alto: caja.alto * escala, renglones };
 }
 
 async function carpetaRecuadros(proyecto) {
@@ -177,39 +175,6 @@ async function colocarImagen(proyecto, editor, secuencia, bytes, pista, desde, h
   return puesto.item;
 }
 
-async function animarEntrada(proyecto, secuencia, clip) {
-  const cadena = await clip.getComponentChain();
-  const movimiento = await p.buscarComponente(cadena, "AE.ADBE Motion");
-  const opacidad = await p.buscarComponente(cadena, "AE.ADBE Opacity");
-  const inicio = await clip.getInPoint();
-  const en = async (cuadros) => inicio.add(await p.cuadros(secuencia, cuadros));
-
-  // Premiere devuelve la posición como [x, y] normalizado (0 a 1)
-  const posicion = movimiento.getParam(0);
-  const actual = (await posicion.getStartValue()).value.value;
-  const x = Array.isArray(actual) ? actual[0] : actual.x;
-  const y = Array.isArray(actual) ? actual[1] : actual.y;
-  p.animar(proyecto, posicion, [
-    [inicio, new ppro.PointF(x, y + SUBIDA)],
-    [await en(5), new ppro.PointF(x, y - REBOTE)],
-    [await en(8), new ppro.PointF(x, y)],
-  ]);
-  p.animar(proyecto, opacidad.getParam(0), [
-    [inicio, 0],
-    [await en(4), 100],
-  ]);
-}
-
-async function estaAnimado(clip) {
-  const cadena = await clip.getComponentChain();
-  const movimiento = await p.buscarComponente(cadena, "AE.ADBE Motion");
-  const opacidad = await p.buscarComponente(cadena, "AE.ADBE Opacity");
-  return (
-    movimiento.getParam(0).getKeyframeListAsTickTimes().length > 0 &&
-    opacidad.getParam(0).getKeyframeListAsTickTimes().length > 0
-  );
-}
-
 async function recuadro(estilo) {
   const ctx = await p.contexto();
   if (!ctx) return;
@@ -232,8 +197,10 @@ async function recuadro(estilo) {
     return;
   }
 
-  const margenX = medida.alto * MARGEN_X;
-  const margenY = medida.alto * MARGEN_Y;
+  // Los márgenes salen del alto de un renglón: con varios renglones el recuadro no se agranda de más.
+  const altoRenglon = medida.alto / medida.renglones;
+  const margenX = altoRenglon * MARGEN_X;
+  const margenY = altoRenglon * MARGEN_Y;
   const caja = {
     x: medida.x - margenX,
     y: medida.y - margenY,
@@ -266,12 +233,6 @@ async function recuadro(estilo) {
   const puesto = await colocarImagen(proyecto, editor, secuencia, bytes, pistaRecuadro, desde, hasta, nombre);
   if (!puesto) throw new Error("No encontré el recuadro después de ponerlo.");
 
-  for (const clip of [puesto, texto]) {
-    for (let intento = 0; intento < 3 && !(await estaAnimado(clip)); intento++) {
-      await animarEntrada(proyecto, secuencia, clip);
-      if (!(await estaAnimado(clip))) await new Promise((listo) => setTimeout(listo, 300));
-    }
-  }
   panel.log(`Recuadro ${estilo.nombre.toLowerCase()} listo en V${pistaRecuadro + 1}.`, "ok");
   return { pistaRecuadro, desde, hasta, medida, caja };
 }
