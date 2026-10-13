@@ -40,29 +40,75 @@ function cajaDelTexto(imagen, umbral = 60) {
   return { x: x0, y: y0, ancho: x1 - x0 + 1, alto: y1 - y0 + 1 };
 }
 
-// Cuenta los renglones del texto: tramos de filas con píxeles separados por un hueco vacío.
-// Los huecos chicos (punto de la i, signos) no cuentan. Si los renglones se tocan, da 1.
+// Mide los renglones del texto y devuelve { renglones, alto } con el alto promedio de la tinta de un renglón.
+// 1) Tramos de filas con píxeles separados por un hueco vacío; los huecos chicos (punto de la i) se unen.
+// 2) Si los renglones se tocan (la cola de una "g" con la "l" de abajo), un tramo se parte donde la
+//    densidad de tinta cae a casi nada entre dos zonas densas.
 function renglonesDelTexto(imagen, caja, umbral = 60) {
+  const densidad = [];
+  for (let y = caja.y; y < caja.y + caja.alto; y++) {
+    let n = 0;
+    for (let x = caja.x; x < caja.x + caja.ancho; x++) if (imagen.brillo(x, y) > umbral) n++;
+    densidad.push(n);
+  }
   const tramos = [];
   let inicio = -1;
-  for (let y = caja.y; y < caja.y + caja.alto; y++) {
-    let hay = false;
-    for (let x = caja.x; x < caja.x + caja.ancho && !hay; x++) hay = imagen.brillo(x, y) > umbral;
-    if (hay && inicio < 0) inicio = y;
-    if (!hay && inicio >= 0) {
-      tramos.push([inicio, y - 1]);
+  densidad.forEach((n, i) => {
+    if (n > 0 && inicio < 0) inicio = i;
+    if (n === 0 && inicio >= 0) {
+      tramos.push([inicio, i - 1]);
       inicio = -1;
     }
-  }
-  if (inicio >= 0) tramos.push([inicio, caja.y + caja.alto - 1]);
-  if (tramos.length === 0) return 1;
+  });
+  if (inicio >= 0) tramos.push([inicio, densidad.length - 1]);
+  if (tramos.length === 0) return { renglones: 1, alto: caja.alto };
 
   const mayor = Math.max(...tramos.map((t) => t[1] - t[0] + 1));
-  let renglones = 1;
+  const grupos = [tramos[0].slice()];
   for (let i = 1; i < tramos.length; i++) {
-    if (tramos[i][0] - tramos[i - 1][1] - 1 >= mayor * 0.15) renglones++;
+    const ultimo = grupos[grupos.length - 1];
+    if (tramos[i][0] - ultimo[1] - 1 >= mayor * 0.15) grupos.push(tramos[i].slice());
+    else ultimo[1] = tramos[i][1];
   }
-  return renglones;
+
+  const renglones = [];
+  for (const [a, b] of grupos) {
+    const suave = [];
+    for (let y = a; y <= b; y++) {
+      const vecinos = [densidad[y - 1], densidad[y], densidad[y + 1]].filter((v) => v !== undefined);
+      suave.push(vecinos.reduce((s, v) => s + v, 0) / vecinos.length);
+    }
+    const tope = Math.max(...suave);
+    const izquierda = [];
+    let m = 0;
+    suave.forEach((v, i) => { m = Math.max(m, v); izquierda[i] = m; });
+    const derecha = [];
+    m = 0;
+    for (let i = suave.length - 1; i >= 0; i--) { m = Math.max(m, suave[i]); derecha[i] = m; }
+
+    // Valles: filas casi vacías entre dos zonas densas. Se corta en el punto más vacío de cada valle.
+    const cortes = [];
+    let valle = null;
+    for (let i = 0; i <= suave.length; i++) {
+      const pico = i < suave.length ? Math.min(izquierda[i], derecha[i]) : 0;
+      const enValle = i < suave.length && pico >= tope * 0.12 && suave[i] <= pico * 0.2;
+      if (enValle) {
+        if (!valle || suave[i] < suave[valle]) valle = i;
+      } else if (valle !== null) {
+        cortes.push(valle);
+        valle = null;
+      }
+    }
+    let desde = 0;
+    for (const corte of [...cortes, suave.length]) {
+      let y0 = desde, y1 = corte === suave.length ? suave.length - 1 : corte - 1;
+      while (y0 < y1 && densidad[a + y0] === 0) y0++;
+      while (y1 > y0 && densidad[a + y1] === 0) y1--;
+      renglones.push(y1 - y0 + 1);
+      desde = corte + 1;
+    }
+  }
+  return { renglones: renglones.length, alto: renglones.reduce((s, v) => s + v, 0) / renglones.length };
 }
 
 function colorRGB(hex) {

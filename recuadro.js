@@ -42,6 +42,7 @@ function guardarTamanio(n) {
 }
 
 let tamanio = leerTamanio();
+const PASO_MEDIDA = 0.01; // cada toque de Ancho o Alto suma o resta este % del cuadro
 const REDONDEO = 0.28; // radio = esta fracción del alto del recuadro
 const BORDE = 1 / 540; // grosor del borde = esta fracción del ancho del cuadro
 
@@ -139,10 +140,10 @@ async function medirTexto(secuencia, texto, cuadro) {
   if (!bytes) throw new Error("No pude leer el cuadro exportado.");
   const imagen = panel.dibujo.leerBMP(bytes);
   const caja = panel.dibujo.cajaDelTexto(imagen);
-  const renglones = caja ? panel.dibujo.renglonesDelTexto(imagen, caja) : 1;
+  const lineas = caja ? panel.dibujo.renglonesDelTexto(imagen, caja) : { renglones: 1, alto: 0 };
   try { await archivo.delete(); } catch (error) { /* no importa */ }
   if (!caja) return null;
-  return { x: caja.x * escala, y: caja.y * escala, ancho: caja.ancho * escala, alto: caja.alto * escala, renglones };
+  return { x: caja.x * escala, y: caja.y * escala, ancho: caja.ancho * escala, alto: caja.alto * escala, renglones: lineas.renglones, altoRenglon: lineas.alto * escala };
 }
 
 async function carpetaRecuadros(proyecto) {
@@ -228,6 +229,92 @@ async function escalarClip(proyecto, clip, factor, centro) {
   if (Math.abs(leida - nueva) > 0.5) throw new Error("Premiere no aplicó el tamaño.");
 }
 
+const punto = (v) => (Array.isArray(v) ? { x: v[0], y: v[1] } : { x: v.x, y: v.y });
+
+// Posición, ancla y escala del clip (valores fijos, sin keyframes).
+async function leerMovimiento(clip) {
+  const cadena = await clip.getComponentChain();
+  const mov = await p.buscarComponente(cadena, "AE.ADBE Motion");
+  const [pos, ancla, escala] = [mov.getParam(0), mov.getParam(5), mov.getParam(1)];
+  if (pos.isTimeVarying() || ancla.isTimeVarying() || escala.isTimeVarying()) {
+    throw new Error("El recuadro tiene keyframes de posición o escala: no se le cambia la medida.");
+  }
+  return {
+    pos: punto((await pos.getStartValue()).value.value),
+    ancla: punto((await ancla.getStartValue()).value.value),
+    escala: (await escala.getStartValue()).value.value,
+  };
+}
+
+// Deja posición y ancla en el mismo punto (el centro del recuadro): así la escala crece desde el centro.
+async function ponerMovimiento(proyecto, clip, m) {
+  const cadena = await clip.getComponentChain();
+  const mov = await p.buscarComponente(cadena, "AE.ADBE Motion");
+  const [pos, ancla, escala] = [mov.getParam(0), mov.getParam(5), mov.getParam(1)];
+  p.transaccion(proyecto, "Recuadro: ancla", (c) => {
+    c.addAction(ancla.createSetValueAction(ancla.createKeyframe(new ppro.PointF(m.ancla.x, m.ancla.y))));
+    c.addAction(pos.createSetValueAction(pos.createKeyframe(new ppro.PointF(m.pos.x, m.pos.y))));
+    if (typeof m.escala === "number" && m.escala !== 100) c.addAction(escala.createSetValueAction(escala.createKeyframe(m.escala)));
+  });
+}
+
+// La medida del recuadro viaja en el nombre del archivo, así se puede cambiar después sin volver a medir.
+const NOMBRE_RECUADRO = /^recuadro-([a-z]+)-\d+-x(-?\d+)-y(-?\d+)-w(\d+)-h(\d+)\.tga$/;
+
+function dibujarRecuadro(cuadro, caja, estilo) {
+  const radio = Math.min(caja.alto / 2, caja.alto * REDONDEO);
+  const grosor = Math.max(1.5, cuadro.ancho * BORDE);
+  return panel.dibujo.recuadroTGA(cuadro.ancho, cuadro.alto, caja, estilo.relleno, estilo.borde, radio, grosor);
+}
+
+function nombreRecuadro(estilo, caja) {
+  return `recuadro-${estilo.id}-${Date.now()}-x${Math.round(caja.x)}-y${Math.round(caja.y)}-w${Math.round(caja.ancho)}-h${Math.round(caja.alto)}`;
+}
+
+// Cambia el ancho y el alto del recuadro seleccionado, desde su centro, redibujándolo (los bordes no se deforman).
+// dAncho y dAlto van como fracción del cuadro (0.01 = 1%).
+async function ajustarRecuadro(dAncho, dAlto) {
+  const ctx = await p.contexto();
+  if (!ctx) return;
+  const { proyecto, secuencia } = ctx;
+  const editor = ppro.SequenceEditor.getEditor(secuencia);
+
+  let viejo = null;
+  let datos = null;
+  for (const clip of await p.clipsSeleccionados(secuencia)) {
+    const item = await clip.getProjectItem();
+    const m = NOMBRE_RECUADRO.exec(item.name || "");
+    if (m) { viejo = clip; datos = m; break; }
+  }
+  if (!viejo) {
+    panel.log("Seleccioná un recuadro hecho con este panel.", "error");
+    return;
+  }
+  const estilo = ESTILOS.find((e) => e.id === datos[1]);
+  if (!estilo) {
+    panel.log("No reconozco el color de este recuadro.", "error");
+    return;
+  }
+  const cuadro = await tamanioCuadro(secuencia);
+  const ancho = Math.max(20, Number(datos[4]) + dAncho * cuadro.ancho);
+  const alto = Math.max(20, Number(datos[5]) + dAlto * cuadro.alto);
+  const centroX = Number(datos[2]) + Number(datos[4]) / 2;
+  const centroY = Number(datos[3]) + Number(datos[5]) / 2;
+  const caja = { x: centroX - ancho / 2, y: centroY - alto / 2, ancho, alto };
+
+  const movimiento = await leerMovimiento(viejo);
+  const desde = (await viejo.getStartTime()).seconds;
+  const hasta = (await viejo.getEndTime()).seconds;
+  const pista = await viejo.getTrackIndex();
+
+  const bytes = dibujarRecuadro(cuadro, caja, estilo);
+  quitar(proyecto, editor, viejo);
+  const nuevo = await colocarImagen(proyecto, editor, secuencia, bytes, pista, desde, hasta, nombreRecuadro(estilo, caja));
+  if (!nuevo) throw new Error("No encontré el recuadro después de redibujarlo.");
+  await ponerMovimiento(proyecto, nuevo, movimiento);
+  panel.log(`Recuadro: ${Math.round(ancho)} x ${Math.round(alto)} px.`, "ok");
+}
+
 async function recuadro(estilo) {
   const ctx = await p.contexto();
   if (!ctx) return;
@@ -251,7 +338,7 @@ async function recuadro(estilo) {
   }
 
   // Los márgenes salen del alto de un renglón: con varios renglones el recuadro no se agranda de más.
-  const altoRenglon = medida.alto / medida.renglones;
+  const altoRenglon = medida.altoRenglon;
   const margenX = altoRenglon * MARGEN_X;
   const margenY = altoRenglon * MARGEN_Y;
   const caja = {
@@ -260,9 +347,7 @@ async function recuadro(estilo) {
     ancho: medida.ancho + margenX * 2,
     alto: medida.alto + margenY * 2,
   };
-  const radio = Math.min(caja.alto / 2, caja.alto * REDONDEO);
-  const grosor = Math.max(1.5, cuadro.ancho * BORDE);
-  const bytes = panel.dibujo.recuadroTGA(cuadro.ancho, cuadro.alto, caja, estilo.relleno, estilo.borde, radio, grosor);
+  const bytes = dibujarRecuadro(cuadro, caja, estilo);
 
   // Pista: la de abajo del texto si está libre; si no, se sube el texto a una libre.
   const pistaTexto = await texto.getTrackIndex();
@@ -282,12 +367,17 @@ async function recuadro(estilo) {
     pistaRecuadro = pistaTexto;
   }
 
-  const nombre = `recuadro-${estilo.id}-${Date.now()}`;
+  const nombre = nombreRecuadro(estilo, caja);
   const puesto = await colocarImagen(proyecto, editor, secuencia, bytes, pistaRecuadro, desde, hasta, nombre);
   if (!puesto) throw new Error("No encontré el recuadro después de ponerlo.");
 
+  const centro = { x: (caja.x + caja.ancho / 2) / cuadro.ancho, y: (caja.y + caja.alto / 2) / cuadro.alto };
+  try {
+    await ponerMovimiento(proyecto, puesto, { pos: centro, ancla: centro });
+  } catch (error) {
+    panel.log(`El recuadro quedó, pero sin el ancla en el centro: ${error.message}`, "error");
+  }
   if (tamanio !== 100) {
-    const centro = { x: (caja.x + caja.ancho / 2) / cuadro.ancho, y: (caja.y + caja.alto / 2) / cuadro.alto };
     try {
       for (const clip of [puesto, texto]) await escalarClip(proyecto, clip, tamanio / 100, centro);
     } catch (error) {
@@ -300,11 +390,12 @@ async function recuadro(estilo) {
 }
 
 panel.recuadro = recuadro;
+panel.ajustarRecuadro = ajustarRecuadro;
 panel.estilosRecuadro = ESTILOS;
 
 panel.registrar({
   nombre: "Recuadro",
-  descripcion: "Seleccioná el subtítulo y tocá un color. Tamaño achica o agranda texto y recuadro juntos.",
+  descripcion: "Seleccioná el subtítulo y tocá un color. Tamaño achica o agranda texto y recuadro juntos; Ancho y Alto cambian el recuadro seleccionado.",
 
   dibujar(caja) {
     const fila = document.createElement("div");
@@ -329,36 +420,48 @@ panel.registrar({
     }
     caja.appendChild(fila);
 
-    const filaTamanio = document.createElement("div");
-    filaTamanio.style.display = "flex";
-    filaTamanio.style.alignItems = "center";
-    filaTamanio.style.marginTop = "4px";
-    const etiqueta = document.createElement("div");
-    etiqueta.textContent = "Tamaño";
-    etiqueta.style.marginRight = "8px";
-    const valor = document.createElement("div");
-    valor.style.minWidth = "44px";
-    valor.style.textAlign = "center";
-    const mostrar = () => { valor.textContent = `${tamanio}%`; };
-    const paso = (texto, delta) => {
-      const boton = document.createElement("div");
-      boton.textContent = texto;
-      boton.style.width = "28px";
-      boton.style.textAlign = "center";
-      boton.style.padding = "4px 0";
-      boton.style.border = "1px solid #4a4a4a";
-      boton.style.borderRadius = "4px";
-      boton.style.backgroundColor = "#2d2d2d";
-      boton.style.cursor = "pointer";
-      boton.addEventListener("click", () => {
-        tamanio = Math.min(TAMANIO_MAX, Math.max(TAMANIO_MIN, tamanio + delta));
-        guardarTamanio(tamanio);
-        mostrar();
-      });
-      return boton;
+    const filaMedida = (nombre, menos, mas, mostrarValor) => {
+      const filaX = document.createElement("div");
+      filaX.style.display = "flex";
+      filaX.style.alignItems = "center";
+      filaX.style.marginTop = "4px";
+      const etiqueta = document.createElement("div");
+      etiqueta.textContent = nombre;
+      etiqueta.style.width = "52px";
+      const valor = document.createElement("div");
+      valor.style.minWidth = "44px";
+      valor.style.textAlign = "center";
+      if (mostrarValor) valor.textContent = mostrarValor();
+      const boton = (texto, accion) => {
+        const b = document.createElement("div");
+        b.textContent = texto;
+        b.style.width = "28px";
+        b.style.textAlign = "center";
+        b.style.padding = "4px 0";
+        b.style.border = "1px solid #4a4a4a";
+        b.style.borderRadius = "4px";
+        b.style.backgroundColor = "#2d2d2d";
+        b.style.cursor = "pointer";
+        b.addEventListener("click", async () => {
+          try {
+            await accion();
+            if (mostrarValor) valor.textContent = mostrarValor();
+          } catch (error) {
+            panel.log(`Error: ${error.message}`, "error");
+          }
+        });
+        return b;
+      };
+      filaX.append(etiqueta, boton("−", menos), valor, boton("+", mas));
+      caja.appendChild(filaX);
     };
-    mostrar();
-    filaTamanio.append(etiqueta, paso("−", -TAMANIO_PASO), valor, paso("+", TAMANIO_PASO));
-    caja.appendChild(filaTamanio);
+
+    const cambiarTamanio = (delta) => () => {
+      tamanio = Math.min(TAMANIO_MAX, Math.max(TAMANIO_MIN, tamanio + delta));
+      guardarTamanio(tamanio);
+    };
+    filaMedida("Tamaño", cambiarTamanio(-TAMANIO_PASO), cambiarTamanio(TAMANIO_PASO), () => `${tamanio}%`);
+    filaMedida("Ancho", () => ajustarRecuadro(-PASO_MEDIDA, 0), () => ajustarRecuadro(PASO_MEDIDA, 0));
+    filaMedida("Alto", () => ajustarRecuadro(0, -PASO_MEDIDA), () => ajustarRecuadro(0, PASO_MEDIDA));
   },
 });
