@@ -1,0 +1,4 @@
+# El .bat se baja crudo desde GitHub (no por git checkout).
+# -text evita que Git cambie los saltos de linea: en el repo tienen que quedar CRLF.
+instalador/*.bat -text linguist-language=Batchfile
+instalador/*.txt -text
