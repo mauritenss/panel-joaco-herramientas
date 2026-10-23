@@ -1,0 +1,34 @@
+﻿PANEL JOACO — cómo instalarlo en Windows
+=========================================
+
+1. Bajá el instalador. Clic derecho en este link y "Guardar enlace como":
+
+https://github.com/mauritenss/panel-joaco-herramientas/raw/main/instalador/Instalar%20Panel%20Joaco.bat
+
+Tiene que quedar con el nombre "Instalar Panel Joaco.bat".
+Si se abre como texto en el navegador: Ctrl+S, nombre "Instalar Panel Joaco.bat",
+tipo "Todos los archivos". Si el nombre termina en .txt, sacale el .txt.
+
+2. Doble clic en ese archivo y seguí lo que dice la ventana negra.
+Cuando termina, dice Listo. Recién ahí apretá una tecla para cerrarla.
+No hace falta "Ejecutar como administrador", salvo que la ventana lo pida.
+
+Si Windows dice "Windows protegió tu PC"
+- Tocá "Más información".
+- Tocá "Ejecutar de todas formas".
+
+Plan B, a mano
+Si el doble clic no anda:
+1. Bajá el panel y dejalo en Descargas:
+https://github.com/mauritenss/panel-joaco-herramientas/raw/main/instalador/panel-joaco-0.9.0.ccx
+2. Cerrá Premiere.
+3. Apretá la tecla Windows, escribí cmd y apretá Enter.
+4. Pegá esta línea y apretá Enter:
+
+"C:\Program Files\Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe" --install "%USERPROFILE%\Downloads\panel-joaco-0.9.0.ccx"
+
+Si dice que no encuentra ese programa, pegá esta otra línea:
+
+"C:\Program Files (x86)\Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\UnifiedPluginInstallerAgent.exe" --install "%USERPROFILE%\Downloads\panel-joaco-0.9.0.ccx"
+
+5. Abrí Premiere > Ventana > Extensiones (UXP) > Panel Joaco.
