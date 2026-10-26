@@ -1,5 +1,11 @@
 {
   "version": "0.10.0",
   "instalador": "https://raw.githubusercontent.com/mauritenss/panel-joaco-herramientas/main/instalador/panel-joaco-0.9.0.ccx",
+  "versiones": [
+    {
+      "version": "0.9.0",
+      "instalador": "https://raw.githubusercontent.com/mauritenss/panel-joaco-herramientas/main/instalador/panel-joaco-0.9.0.ccx"
+    }
+  ],
   "archivos": ["_base.js", "dibujo.js", "recuadro.js", "suavizar.js", "aac.js", "medios.js", "sincro.js", "sincronizar.js"]
 }
