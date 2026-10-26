@@ -15,8 +15,7 @@ const SALTO_MAXIMO = 256 * 1024; // si entre dos pedazos de audio hay menos que 
 
 async function abrirUXP(ruta) {
   const fs = require("fs");
-  const url = "file:" + (ruta.startsWith("/") ? "" : "/") + ruta.replace(/\\/g, "/");
-  const variantes = [...new Set([url, encodeURI(url), ruta])];
+  const variantes = panel.premiere.urlsParaFs(ruta);
   let ultimoError = null;
   for (const camino of variantes) {
     try {
@@ -651,8 +650,14 @@ async function leerMP4(archivo, alAvanzar) {
 async function leerAudio(ruta, alAvanzar = () => {}) {
   const archivo = await abrir(ruta);
   try {
-    const partes = ruta.split(/[\\/]/);
-    const base = { ruta, nombre: partes[partes.length - 1], carpeta: partes[partes.length - 2] || "", fecha: archivo.fecha };
+    const nativa = /^file:/i.test(ruta) ? panel.premiere.rutaDeUrl(ruta) : ruta;
+    const partes = String(nativa).split(/[\\/]/);
+    const base = {
+      ruta,
+      nombre: panel.premiere.normalizarTexto(partes[partes.length - 1]),
+      carpeta: panel.premiere.normalizarTexto(partes[partes.length - 2] || ""),
+      fecha: archivo.fecha,
+    };
     const r = (await leerWAV(archivo, alAvanzar)) || (await leerMP4(archivo, alAvanzar));
     if (!r) throw new Error("formato que no conozco (leo WAV, MP4 y MOV)");
     if (r.sinAudio) return Object.assign(base, r, { huella: null, duracion: 0 });

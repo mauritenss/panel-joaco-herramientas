@@ -254,11 +254,16 @@ const CARPETA_PANTALLA = /pantalla|screen|obs|captura|grabaci|display|monitor/i;
 const CARPETA_CAMARA = /c[aá]mara|camera|\bcam\b|video|sony|canon|lumix|fuji/i;
 const MARCAS_CAMARA = ["SONY", "Sony", "Canon", "Panasonic", "FUJIFILM", "Nikon", "DJI", "GoPro", "Blackmagic"];
 
+// Mac guarda "Cámara" descompuesto (NFD). El regex necesita la tilde compuesta.
+const plano = (s) => (typeof String(s || "").normalize === "function" ? String(s || "").normalize("NFC") : String(s || ""));
+
 function puntosPantalla(l) {
+  const nombre = plano(l.nombre);
+  const carpeta = plano(l.carpeta);
   let p = 0;
-  if (NOMBRE_OBS.test(l.nombre)) p += 3;
-  if (CARPETA_PANTALLA.test(l.carpeta)) p += 3;
-  if (CARPETA_CAMARA.test(l.carpeta)) p -= 3;
+  if (NOMBRE_OBS.test(nombre)) p += 3;
+  if (CARPETA_PANTALLA.test(carpeta)) p += 3;
+  if (CARPETA_CAMARA.test(carpeta)) p -= 3;
   if (l.marcas.includes("OBS")) p += 2;
   if (l.marcas.includes("Lavf")) p += 1;
   if (l.marcas.some((m) => MARCAS_CAMARA.includes(m))) p -= 2;
@@ -271,6 +276,8 @@ function puntosPantalla(l) {
 function clasificar(lecturas) {
   const aparatos = new Map();
   for (const l of lecturas) {
+    l.nombre = plano(l.nombre);
+    l.carpeta = plano(l.carpeta);
     l.aparato = l.video
       ? `video|${l.carpeta}|${l.video.codec}|${l.video.ancho}x${l.video.alto}`
       : `audio|${l.carpeta}|${l.formato}|${l.frecuencia}`;

@@ -24,7 +24,10 @@ function revisarCancelado() {
 }
 
 const minutos = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-const nombreDe = (ruta) => ruta.split(/[\\/]/).pop();
+const nombreDe = (ruta) => {
+  const nombre = String(ruta).split(/[\\/]/).pop();
+  return typeof nombre.normalize === "function" ? nombre.normalize("NFC") : nombre;
+};
 
 function enTandas(proyecto, nombre, armadores) {
   for (let i = 0; i < armadores.length; i += MAX_ACCIONES) {
@@ -67,8 +70,11 @@ async function archivosDeLaSecuencia(secuencia) {
       otros++;
       continue;
     }
-    if (!porRuta.has(ruta)) porRuta.set(ruta, { ruta, projectItem, clip, items: [], conVideo: false, duracion: 0 });
-    const a = porRuta.get(ruta);
+    // I:\My Drive\... y /Users/.../My Drive/... son el mismo archivo. Se abre con la ruta
+    // que dio Premiere: no se inventa la de la otra compu.
+    const clave = p.claveDeRuta(ruta);
+    if (!porRuta.has(clave)) porRuta.set(clave, { ruta, projectItem, clip, items: [], conVideo: false, duracion: 0 });
+    const a = porRuta.get(clave);
     a.items.push(item);
     if (video) a.conVideo = true;
     a.duracion = Math.max(a.duracion, (await item.getDuration()).seconds);
@@ -172,7 +178,8 @@ function carriles(clips, inicioDe, categoria) {
 async function pistasDeAudioDe(secuencia, rutas) {
   const usadas = new Set();
   for (const { item, pista } of await itemsDe(secuencia, false)) {
-    if (rutas.has((await rutaDe(item)).ruta)) usadas.add(pista);
+    const { ruta } = await rutaDe(item);
+    if (rutas.has(p.claveDeRuta(ruta))) usadas.add(pista);
   }
   return [...usadas];
 }
@@ -244,7 +251,7 @@ async function sincronizar() {
         return editor.createOverwriteItemAction(clips[i].archivo.projectItem, ppro.TickTime.createWithTicks(String(ticks)), carril.video, desde);
       }));
       // Un clip estéreo usa una pista de audio; uno con dos canales mono usa dos: se mira dónde quedó.
-      carril.audio = await pistasDeAudioDe(ctx.secuencia, new Set(carril.lista.map((i) => clips[i].archivo.ruta)));
+      carril.audio = await pistasDeAudioDe(ctx.secuencia, new Set(carril.lista.map((i) => p.claveDeRuta(clips[i].archivo.ruta))));
       if (carril.audio.length) pistaAudio = Math.max(...carril.audio) + 1;
       const n = carrilesDe[cat].length > 1 ? ` ${k + 1}` : "";
       if (carril.video >= 0) nombresVideo[carril.video] = `${NOMBRES[cat]}${n}`;
